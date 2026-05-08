@@ -1,0 +1,392 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>WebGPU Drift Smoke Simulation</title>
+
+  <style>
+body {
+  margin: 0;
+  background-image: url("map1.png");
+  background-size: cover;
+  background-position: center;
+  overflow: hidden;
+}
+
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  pointer-events: none;
+}
+
+canvas { width: 100vw; height: 100vh; display: block; }
+canvas, #car, #info, #mapButton {
+  position: absolute;
+  z-index: 1;
+}
+#info {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  color: #89CFF0; /* baby blue */
+  font-family: Arial;
+  background: rgba(0,0,0,0.5);
+  padding: 10px;
+  border-radius: 8px;
+  text-shadow: 0 0 6px rgba(137, 207, 240, 0.8);
+}
+
+#mapButton {
+  position: absolute;
+  top: 180px;
+  left: 12px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  border: none;
+  font-weight: bold;
+  cursor: pointer;
+} 
+
+#smokeLabel {
+  position: absolute;
+  top: 240px;
+  left: 12px;
+  color: #89CFF0;
+  z-index: 5;
+}
+
+#smokeSlider {
+  width: 140px;
+  pointer-events: auto;
+}
+
+#car {
+  position: absolute;
+  width: 100px;
+  height: auto;
+  transform-origin: center;
+  pointer-events: none;
+}
+  </style>
+</head>
+
+
+<body>
+<canvas id="canvas"></canvas>
+
+<img id="car" src="car.png">
+
+<div id="info">
+  <b>GPU Drift Smoke Simulation</b><br>
+  W/S = Drive / Reverse<br>
+  A/D = Steer<br>
+  Space = Drift Mode<br>
+  Particles: 120,000<br>
+  Compute Shader = particle updates<br>
+  Render Shaders = draw smoke
+</div>
+
+<button id="mapButton">Switch Map</button>
+
+<label id="smokeLabel">
+  Smoke Density:
+  <input id="smokeSlider" type="range" min="0.1" max="1.0" step="0.05" value="0.8">
+</label>
+
+<script type="module">
+const canvas = document.getElementById("canvas");
+const car = document.getElementById("car");
+const mapButton = document.getElementById("mapButton");
+const smokeSlider = document.getElementById("smokeSlider");
+
+let currentMap = 1;
+
+mapButton.addEventListener("click", () => {
+  currentMap = currentMap === 1 ? 2 : 1;
+  document.body.style.backgroundImage = `url("map${currentMap}.png")`;
+});
+
+if (!navigator.gpu) {
+  alert("WebGPU is not supported in this browser.");
+  throw new Error("WebGPU not supported");
+}
+
+const adapter = await navigator.gpu.requestAdapter();
+const device = await adapter.requestDevice();
+const context = canvas.getContext("webgpu");
+const format = navigator.gpu.getPreferredCanvasFormat();
+
+function resizeCanvas() {
+  canvas.width = window.innerWidth * devicePixelRatio;
+  canvas.height = window.innerHeight * devicePixelRatio;
+}
+resizeCanvas();
+
+context.configure({
+  device,
+  format,
+  alphaMode: "premultiplied"
+});
+
+const NUM_PARTICLES = 120000;
+
+const particleData = new Float32Array(NUM_PARTICLES * 8);
+
+for (let i = 0; i < NUM_PARTICLES; i++) {
+  const base = i * 8;
+  particleData[base + 4] = Math.random();
+  particleData[base + 5] = Math.random() * 1000;
+}
+
+const particleBuffer = device.createBuffer({
+  size: particleData.byteLength,
+  usage: GPUBufferUsage.STORAGE | GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+  mappedAtCreation: true
+});
+
+new Float32Array(particleBuffer.getMappedRange()).set(particleData);
+particleBuffer.unmap();
+
+const uniformBuffer = device.createBuffer({
+  size: 32,
+  usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
+});
+
+const computeShader = device.createShaderModule({
+  code: await fetch("driftSmokeCompute.wgsl").then(r => r.text())
+});
+
+const renderShader = device.createShaderModule({
+  code: await fetch("driftSmokeRender.wgsl").then(r => r.text())
+});
+
+const bindGroupLayout = device.createBindGroupLayout({
+  entries: [
+    {
+      binding: 0,
+      visibility: GPUShaderStage.COMPUTE,
+      buffer: { type: "storage" }
+    },
+    {
+      binding: 1,
+      visibility: GPUShaderStage.COMPUTE,
+      buffer: { type: "uniform" }
+    }
+  ]
+});
+
+const bindGroup = device.createBindGroup({
+  layout: bindGroupLayout,
+  entries: [
+    { binding: 0, resource: { buffer: particleBuffer } },
+    { binding: 1, resource: { buffer: uniformBuffer } }
+  ]
+});
+
+const computePipeline = device.createComputePipeline({
+  layout: device.createPipelineLayout({
+    bindGroupLayouts: [bindGroupLayout]
+  }),
+  compute: {
+    module: computeShader,
+    entryPoint: "main"
+  }
+});
+
+const renderPipeline = device.createRenderPipeline({
+  layout: "auto",
+  vertex: {
+    module: renderShader,
+    entryPoint: "vs_main",
+    buffers: [
+      {
+        arrayStride: 32,
+        attributes: [
+          { shaderLocation: 0, offset: 0, format: "float32" },
+          { shaderLocation: 1, offset: 4, format: "float32" },
+          { shaderLocation: 2, offset: 8, format: "float32" },
+          { shaderLocation: 3, offset: 12, format: "float32" },
+          { shaderLocation: 4, offset: 16, format: "float32" }
+        ]
+      }
+    ]
+  },
+  fragment: {
+    module: renderShader,
+    entryPoint: "fs_main",
+    targets: [{
+      format,
+      blend: {
+        color: {
+          srcFactor: "src-alpha",
+          dstFactor: "one-minus-src-alpha",
+          operation: "add"
+        },
+        alpha: {
+          srcFactor: "one",
+          dstFactor: "one-minus-src-alpha",
+          operation: "add"
+        }
+      }
+    }]
+  },
+  primitive: {
+    topology: "point-list"
+  }
+});
+
+//car variables 
+let carX = 0;
+let carY = 0;
+let carAngle = 0;
+let carSpeed = 0;
+
+const keys = {};
+
+window.addEventListener("keydown", e => {
+  keys[e.key.toLowerCase()] = true;
+});
+
+window.addEventListener("keyup", e => {
+  keys[e.key.toLowerCase()] = false;
+});
+
+
+let emitX = 0, emitY = 0;
+
+function frame(timeMs) {
+  const time = timeMs * 0.001;
+
+  // drift mode: hold SPACE for more smoke and differnt slide
+const drifting = keys[" "];
+const accel = drifting ? 0.0007 : 0.0003;
+
+  // W/S = move forward/backward
+if (keys["w"]) carSpeed += accel;
+if (keys["s"]) carSpeed -= accel;
+
+  // A/D = steer while moving
+  if (keys["a"]) carAngle += drifting ? 0.028 : 0.025;
+if (keys["d"]) carAngle -= drifting ? 0.028 : 0.025;
+
+  // friction
+carSpeed *= drifting ? 0.96 : 0.90;
+
+  const maxSpeed = drifting ? 0.0018 : 0.012;
+carSpeed = Math.max(-maxSpeed, Math.min(maxSpeed, carSpeed));
+
+
+// smoke gets stronger when drifting or moving fast
+const smokeSliderValue = parseFloat(smokeSlider.value);
+const driftStrength = smokeSliderValue;
+
+  // 0 angle means car faces upward
+const forwardX = -Math.sin(carAngle);
+const forwardY = Math.cos(carAngle);
+
+ // side direction based on the corrected forward vector
+const sideX = forwardY;
+const sideY = -forwardX;
+
+  // move car$
+  carX += forwardX * carSpeed;
+  carY += forwardY * carSpeed;
+
+  //sideways sliding
+  if (drifting) {
+  const slideAmount = carSpeed * 0.45;
+
+  if (keys["a"]) {
+    carX -= sideX * slideAmount;
+    carY -= sideY * slideAmount;
+  }
+
+  if (keys["d"]) {
+    carX += sideX * slideAmount;
+    carY += sideY * slideAmount;
+  }
+}
+
+  // keep car on screen
+  carX = Math.max(-0.9, Math.min(0.9, carX));
+  carY = Math.max(-0.9, Math.min(0.9, carY));
+
+ 
+// rear center of car
+const rearDistance = 0.046; 
+const rearX = carX - forwardX * rearDistance;
+const rearY = carY - forwardY * rearDistance;
+
+// emitter = exactly rear center
+const emitterX = rearX;
+const emitterY = rearY;
+
+emitX = emitX * 0.85 + emitterX * 0.15;
+emitY = emitY * 0.85 + emitterY * 0.15;
+
+const eX = emitX;
+const eY = emitY;
+
+// smoke moves backward from the rear
+const smokeDirX = -forwardX;
+const smokeDirY = -forwardY;
+
+const sideDirX = sideX;
+const sideDirY = sideY;
+
+  const screenX = ((carX + 1) / 2) * window.innerWidth;
+  const screenY = ((-carY + 1) / 2) * window.innerHeight;
+
+  car.style.left = `${screenX - 40}px`;
+  car.style.top = `${screenY - 40}px`;
+
+  //Angle to have smoke at rear 
+  car.style.transform = `rotate(${-carAngle - Math.PI / 2}rad)`;
+
+  device.queue.writeBuffer(
+    uniformBuffer,
+    0,
+    new Float32Array([
+      time,
+      emitterX,
+      emitterY,
+      driftStrength,
+      smokeDirX,
+      smokeDirY,
+      sideDirX,
+      sideDirY
+    ])
+  );
+
+  const encoder = device.createCommandEncoder();
+
+  const computePass = encoder.beginComputePass();
+  computePass.setPipeline(computePipeline);
+  computePass.setBindGroup(0, bindGroup);
+  computePass.dispatchWorkgroups(Math.ceil(NUM_PARTICLES / 64));
+  computePass.end();
+
+  const renderPass = encoder.beginRenderPass({
+    colorAttachments: [{
+      view: context.getCurrentTexture().createView(),
+      clearValue: { r: 0, g: 0, b: 0, a: 0 },
+      loadOp: "clear",
+      storeOp: "store"
+    }]
+  });
+
+  renderPass.setPipeline(renderPipeline);
+  renderPass.setVertexBuffer(0, particleBuffer);
+  renderPass.draw(NUM_PARTICLES);
+  renderPass.end();
+
+  device.queue.submit([encoder.finish()]);
+  requestAnimationFrame(frame);
+}
+
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
