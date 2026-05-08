@@ -8,8 +8,6 @@
 Real-time WebGPU drift smoke simulator using WGSL compute and render shaders.
 </p>
 
-Real-time WebGPU drift smoke simulator using WGSL compute and render shaders.
-
 ## Project Overview
 
 This project is an interactive drift smoke particle simulator inspired by JDM drifting culture and racing games. The simulation uses WebGPU to render thousands of particles in real time while simulating drifting movement, smoke spread, and directional particle behavior.
