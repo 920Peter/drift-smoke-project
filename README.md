@@ -1,4 +1,4 @@
-# WebGPU Drift Smoke Simulator <h1 align="center">WebGPU Drift Smoke Simulator</h1>
+# <h1 align="center">WebGPU Drift Smoke Simulator</h1>
 
 <p align="center">
   <img src="screenshot.png" width="1000"/>
