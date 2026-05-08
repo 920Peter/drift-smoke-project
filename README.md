@@ -1,4 +1,12 @@
-# WebGPU Drift Smoke Simulator !(
+# WebGPU Drift Smoke Simulator <h1 align="center">WebGPU Drift Smoke Simulator</h1>
+
+<p align="center">
+  <img src="screenshot.png" width="1000"/>
+</p>
+
+<p align="center">
+Real-time WebGPU drift smoke simulator using WGSL compute and render shaders.
+</p>
 
 Real-time WebGPU drift smoke simulator using WGSL compute and render shaders.
 
